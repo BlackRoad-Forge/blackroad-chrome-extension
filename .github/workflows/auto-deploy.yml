@@ -1,115 +1,84 @@
-name: 🚀 Auto Deploy
+name: Auto Deploy
 
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  deployments: write
+
 env:
   NODE_VERSION: '20'
 
 jobs:
-  detect-service:
-    name: Detect Service Type
-    runs-on: ubuntu-latest
-    outputs:
-      service_type: ${{ steps.detect.outputs.service_type }}
-      deploy_target: ${{ steps.detect.outputs.deploy_target }}
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Detect Service Type
-        id: detect
-        run: |
-          if [ -f "next.config.mjs" ] || [ -f "next.config.js" ]; then
-            echo "service_type=nextjs" >> $GITHUB_OUTPUT
-            echo "deploy_target=cloudflare" >> $GITHUB_OUTPUT
-          elif [ -f "Dockerfile" ]; then
-            echo "service_type=docker" >> $GITHUB_OUTPUT
-            echo "deploy_target=railway" >> $GITHUB_OUTPUT
-          elif [ -f "package.json" ]; then
-            echo "service_type=node" >> $GITHUB_OUTPUT
-            echo "deploy_target=railway" >> $GITHUB_OUTPUT
-          elif [ -f "requirements.txt" ]; then
-            echo "service_type=python" >> $GITHUB_OUTPUT
-            echo "deploy_target=railway" >> $GITHUB_OUTPUT
-          else
-            echo "service_type=static" >> $GITHUB_OUTPUT
-            echo "deploy_target=cloudflare" >> $GITHUB_OUTPUT
-          fi
-
   deploy-cloudflare:
     name: Deploy to Cloudflare Pages
-    needs: detect-service
-    if: needs.detect-service.outputs.deploy_target == 'cloudflare'
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-      
-      - name: Install Dependencies
-        run: npm ci
-      
-      - name: Build
-        run: npm run build
-        env:
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy .next --project-name=${{ github.event.repository.name }}
+          command: pages deploy . --project-name=blackroad-chrome-extension
 
-  deploy-railway:
-    name: Deploy to Railway
-    needs: detect-service
-    if: needs.detect-service.outputs.deploy_target == 'railway'
+  deploy-worker:
+    name: Deploy Cloudflare Worker
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Install Railway CLI
-        run: npm i -g @railway/cli
-      
-      - name: Deploy to Railway
-        run: railway up --service ${{ github.event.repository.name }}
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Worker Dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
 
   health-check:
     name: Health Check
-    needs: [deploy-cloudflare, deploy-railway]
-    if: always() && (needs.deploy-cloudflare.result == 'success' || needs.deploy-railway.result == 'success')
+    needs: [deploy-cloudflare, deploy-worker]
+    if: always() && (needs.deploy-cloudflare.result == 'success' || needs.deploy-worker.result == 'success')
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Wait for Deployment
+      - name: Wait for Deployment Propagation
         run: sleep 30
-      
-      - name: Check Health Endpoint
+
+      - name: Check Pages Health
         run: |
-          URL="${{ secrets.DEPLOY_URL }}/api/health"
-          curl -f $URL || exit 1
-      
-      - name: Notify Success
-        if: success()
-        run: echo "✅ Deployment successful and healthy!"
-      
-      - name: Notify Failure
-        if: failure()
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://blackroad-chrome-extension.pages.dev" || echo "000")
+          echo "Pages status: $STATUS"
+          if [ "$STATUS" != "200" ] && [ "$STATUS" != "304" ]; then
+            echo "Pages health check returned $STATUS"
+            exit 1
+          fi
+
+      - name: Check Worker Health
+        if: needs.deploy-worker.result == 'success'
         run: |
-          echo "❌ Deployment health check failed!"
-          exit 1
+          if [ ! -z "${{ secrets.WORKER_URL }}" ]; then
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.WORKER_URL }}/health" || echo "000")
+            echo "Worker status: $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              echo "Worker health check returned $STATUS"
+              exit 1
+            fi
+          fi

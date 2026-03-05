@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-extension:
+    name: Validate Chrome Extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Validate manifest.json
+        run: |
+          echo "Validating manifest.json..."
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            const required = ['manifest_version', 'name', 'version', 'description', 'icons', 'action'];
+            const missing = required.filter(k => !manifest[k]);
+            if (missing.length > 0) {
+              console.error('Missing required fields:', missing.join(', '));
+              process.exit(1);
+            }
+            if (manifest.manifest_version !== 3) {
+              console.error('Expected manifest_version 3, got', manifest.manifest_version);
+              process.exit(1);
+            }
+            console.log('manifest.json is valid');
+            console.log('  Name:', manifest.name);
+            console.log('  Version:', manifest.version);
+            console.log('  Manifest Version:', manifest.manifest_version);
+          "
+
+      - name: Validate HTML
+        run: |
+          echo "Checking popup.html exists and is well-formed..."
+          test -f popup.html || (echo "popup.html missing" && exit 1)
+          node -e "
+            const fs = require('fs');
+            const html = fs.readFileSync('popup.html', 'utf8');
+            if (!html.includes('<!DOCTYPE html>')) {
+              console.error('Missing DOCTYPE declaration');
+              process.exit(1);
+            }
+            if (!html.includes('<link rel=\"stylesheet\" href=\"popup.css\">')) {
+              console.error('Missing CSS link');
+              process.exit(1);
+            }
+            if (!html.includes('<script src=\"popup.js\">')) {
+              console.error('Missing JS script');
+              process.exit(1);
+            }
+            console.log('popup.html is valid');
+          "
+
+      - name: Validate Assets
+        run: |
+          echo "Checking all referenced assets exist..."
+          test -f popup.css || (echo "popup.css missing" && exit 1)
+          test -f popup.js || (echo "popup.js missing" && exit 1)
+          test -f icons/icon16.png || (echo "icons/icon16.png missing" && exit 1)
+          test -f icons/icon48.png || (echo "icons/icon48.png missing" && exit 1)
+          test -f icons/icon128.png || (echo "icons/icon128.png missing" && exit 1)
+          echo "All assets present"
+
+      - name: Lint JavaScript
+        run: |
+          echo "Running basic JS syntax check..."
+          node --check popup.js
+          echo "popup.js syntax is valid"
+
+  validate-worker:
+    name: Validate Cloudflare Worker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Lint Worker
+        working-directory: worker
+        run: npm run lint --if-present
+
+      - name: Validate wrangler.toml
+        run: |
+          test -f worker/wrangler.toml || (echo "worker/wrangler.toml missing" && exit 1)
+          echo "wrangler.toml present"
