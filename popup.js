@@ -1,70 +1,83 @@
-// BlackRoad Command Center - Extension Logic
+// BlackRoad Command Center v2.0 — Live Fleet Data
+
+const PRISM = 'https://prism.blackroad.io/api';
 
 // Open URL in new tab
 function openUrl(url) {
-  chrome.tabs.create({ url: url });
+  chrome.tabs.create({ url });
 }
 
-// Search functionality
+// Search
 document.getElementById('search').addEventListener('input', function(e) {
-  const query = e.target.value.toLowerCase();
-  
-  // Filter services
+  const q = e.target.value.toLowerCase();
   document.querySelectorAll('.service, .link-card, .org').forEach(el => {
     const text = el.textContent.toLowerCase();
-    if (query === '' || text.includes(query)) {
-      el.style.display = '';
-      el.style.opacity = '1';
-    } else {
-      el.style.opacity = '0.3';
-    }
+    el.style.opacity = (!q || text.includes(q)) ? '1' : '0.3';
   });
 });
 
 // Keyboard shortcuts
 document.addEventListener('keydown', function(e) {
-  // Focus search on any key
   if (e.key === '/' || (e.key.length === 1 && !e.ctrlKey && !e.metaKey)) {
     document.getElementById('search').focus();
   }
-  
-  // Quick shortcuts
   if (e.metaKey || e.ctrlKey) {
     switch(e.key) {
-      case 'g':
-        e.preventDefault();
-        openUrl('https://github.com/BlackRoad-OS');
-        break;
-      case 'c':
-        e.preventDefault();
-        openUrl('https://dash.cloudflare.com');
-        break;
-      case 'a':
-        e.preventDefault();
-        openUrl('https://blackroad-30k-agents.pages.dev');
-        break;
+      case 'g': e.preventDefault(); openUrl('https://github.com/BlackRoad-OS-Inc'); break;
+      case 'p': e.preventDefault(); openUrl('https://prism.blackroad.io'); break;
+      case 's': e.preventDefault(); openUrl('https://search.blackroad.io'); break;
+      case 'f': e.preventDefault(); openUrl('https://prism.blackroad.io/api/fleet'); break;
     }
   }
 });
 
-// Update agent stats with slight randomization for "live" feel
-function updateStats() {
-  const baseActive = 28500;
-  const baseLearning = 1500;
-  
-  const active = baseActive + Math.floor(Math.random() * 100);
-  const learning = baseLearning - Math.floor(Math.random() * 100);
-  
-  const activeEl = document.querySelector('.stat-value.green');
-  const learningEl = document.querySelector('.stat-value.amber');
-  
-  if (activeEl) activeEl.textContent = active.toLocaleString();
-  if (learningEl) learningEl.textContent = learning.toLocaleString();
+// Live fleet data from Prism
+async function loadFleet() {
+  try {
+    const [fleetRes, kpiRes] = await Promise.all([
+      fetch(PRISM + '/fleet'),
+      fetch(PRISM + '/kpis'),
+    ]);
+    const fleet = await fleetRes.json();
+    const kpis = await kpiRes.json();
+    const nodes = fleet.nodes || [];
+    const online = nodes.filter(n => n.status === 'online').length;
+
+    // Update stats
+    const statsEl = document.getElementById('fleet-stats');
+    if (statsEl) {
+      statsEl.innerHTML = `
+        <div class="stat"><span class="stat-value green">${online}/${nodes.length}</span><span class="stat-label">Nodes</span></div>
+        <div class="stat"><span class="stat-value">${kpis.models || 0}</span><span class="stat-label">Models</span></div>
+        <div class="stat"><span class="stat-value">${kpis.repos || 0}</span><span class="stat-label">Repos</span></div>
+        <div class="stat"><span class="stat-value">${kpis.containers || 0}</span><span class="stat-label">Docker</span></div>
+      `;
+    }
+
+    // Update node list
+    const nodesEl = document.getElementById('node-list');
+    if (nodesEl) {
+      nodesEl.innerHTML = nodes.map(n => `
+        <div class="node ${n.status}">
+          <span class="node-dot ${n.status === 'online' ? 'green' : 'red'}"></span>
+          <span class="node-name">${n.name}</span>
+          <span class="node-info">${n.cpu_temp || '?'}°C · ${n.ollama_models || 0} models · ${n.disk_pct || '?'}%</span>
+        </div>
+      `).join('');
+    }
+
+    // Update status indicator
+    const statusEl = document.getElementById('status-dot');
+    if (statusEl) {
+      statusEl.className = online >= 3 ? 'status-dot green' : online >= 1 ? 'status-dot yellow' : 'status-dot red';
+    }
+  } catch (e) {
+    console.warn('Fleet data unavailable:', e.message);
+  }
 }
 
-// Update stats every 5 seconds
-setInterval(updateStats, 5000);
+// Load immediately and refresh every 30s
+loadFleet();
+setInterval(loadFleet, 30000);
 
-// Log extension opened (for future analytics)
-console.log('BlackRoad Command Center v1.0.0 loaded');
-console.log('Kind Light Mode: Active ☀️');
+console.log('BlackRoad Command Center v2.0 loaded');

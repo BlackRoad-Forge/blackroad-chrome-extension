@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BlackRoad Command Center",
-  "version": "1.1.0",
-  "description": "Fleet monitoring, service access, and quick navigation for BlackRoad OS infrastructure",
+  "version": "2.0.0",
+  "description": "BlackRoad Command Center \u2014 Live fleet monitoring, service search, and quick access to all BlackRoad OS services. Powered by Prism.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -20,5 +20,11 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["alarms", "storage"]
+  "permissions": [
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://prism.blackroad.io/*"
+  ]
 }
